@@ -1,0 +1,18 @@
+constants.py
+.env
+
+google-creds.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# PyCharm
+.idea/
+# Virtual environment
+venv/
+
+# Logs
+logs/
+*.log
