@@ -1,40 +1,42 @@
-# ozon_report
+# Ozon Analytics
 
-## Что это
+A set of standalone Python scripts for daily and weekly Ozon marketplace
+analytics. The project pulls data from the Ozon Seller API and Performance API,
+updates Google Sheets, sends messages to bots, and writes part of the analytics
+into PostgreSQL for use in Grafana.
 
-Набор автономных Python-скриптов для ежедневной и недельной аналитики Ozon. Проект собирает данные из Ozon Seller API и Performance API, обновляет Google Sheets, отправляет сообщения в ботов и пишет часть аналитики в PostgreSQL для дальнейшего использования в Grafana.
+> This is a cleaned, public extract of a production system. No secrets, no
+> product catalog and no generated data are committed. To run it, copy
+> `.env.example` to `.env` and `constants.example.py` to `constants.py`, and
+> provide your own `google-creds.json` (gitignored).
 
-## Что решает
+## What it solves
 
-Проект закрывает регулярную операционную отчётность по Ozon без единой центральной точки входа. Каждый сценарий запускается отдельным скриптом под cron и отвечает за свой срез: свод, SKU, оперативка, ценовые сегменты, недельная аналитика, потребность и загрузка в БД.
+Regular operational Ozon reporting, split across focused scripts run by cron:
+summaries, SKU analytics, operational metrics, price segments, weekly analytics,
+supply needs and database loading. There is no single central entry point by
+design; each script owns one slice.
 
-## Основные возможности
+## Features
 
-- загрузка дневных метрик Ozon в Google Sheets;
-- недельные и сравнительные отчёты;
-- расчёт ценовых сегментов;
-- выгрузка данных в PostgreSQL;
-- отправка сообщений в ботов;
-- отдельные задачи по оперативной аналитике и потребности.
+- daily Ozon metrics into Google Sheets;
+- weekly and comparative reports;
+- price-segment calculation;
+- data export into PostgreSQL (Grafana backend);
+- messages to bots;
+- separate operational-analytics and supply-needs jobs.
 
-## Стек
+## Stack
 
-- Python
-- requests
-- pandas
-- gspread
-- oauth2client
-- openpyxl
-- psycopg2-binary
-- python-dotenv
+Python, requests, pandas, gspread, oauth2client, openpyxl, psycopg2-binary,
+python-dotenv.
 
-## Структура проекта
+## Project structure
 
 ```text
-ozon_report/
-├── constants.py
+ozon-analytics/
+├── constants.example.py   # copy to constants.py and fill with your mappings
 ├── ozon_to_sheets.py
-├── ozon_14days.py
 ├── weekly_sum.py
 ├── week_live.py
 ├── weekfindyn.py
@@ -44,110 +46,97 @@ ozon_report/
 ├── seg.py / segW.py
 ├── ozon_google_op.py
 ├── ozon_bot.py
-├── ozon_opbot.py
 ├── ozon_obor.py
 ├── obor_excel.py
-├── google-creds.json
-└── .env
+├── finance_accrual.py     # finance/accrual compatibility layer (see below)
+└── .env.example
 ```
 
-## Установка зависимостей
+## Setup
 
 ```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+cp .env.example .env                 # fill OZON_*, PG_*, sheet names
+cp constants.example.py constants.py # fill SKU / warehouse mappings
+# place your Google service-account key as google-creds.json (gitignored)
 ```
 
-## Точки входа
+## Entry points
 
-У проекта нет одного `main.py`. Запускать нужно конкретный сценарий:
-
-- `python ozon_to_sheets.py`
-- `python grafana_report.py`
-- `python weekly_sum.py`
-- `python ozon_bot.py`
-- `python daily.py`
-- `python dailyhour.py`
-
-## Как использовать
-
-1. Подготовить `.env` и `google-creds.json`.
-2. Проверить доступ сервисного аккаунта к Google Sheets.
-3. Запускать нужный скрипт вручную или через cron.
-4. Для задач с PostgreSQL проверить переменные `PG_*`.
-
-## Важные файлы
-
-- `constants.py` — маппинги SKU и строк листов.
-- `google-creds.json` — ключ сервисного аккаунта Google.
-- `.env` — токены и параметры окружения.
-- `requirements.txt` — зависимости проекта.
-
-## Примеры команд
+There is no single `main.py`. Run a specific script:
 
 ```bash
 python ozon_to_sheets.py
 python grafana_report.py
+python weekly_sum.py
 python daily.py
 python dailyhour.py
-python weekly_sum.py
 python week_live.py
 python seg.py
 ```
 
-## Миграция finance/transaction → finance/accrual (отключение 3-6 июля 2026)
+## finance/transaction to finance/accrual migration (Ozon, July 2026)
 
-Методы `/v3/finance/transaction/list` и `/v3/finance/transaction/totals`
-устаревают и отключаются Ozon 3-6 июля 2026. Замена — новые методы
-`/v1/finance/accrual/{types,by-day,postings}`.
+The methods `/v3/finance/transaction/list` and `/v3/finance/transaction/totals`
+are being deprecated and switched off by Ozon on 3-6 July 2026. The replacement
+is the new `/v1/finance/accrual/{types,by-day,postings}` family.
 
-Чтобы не править одну и ту же логику в 7 скриптах, добавлен единый слой
-**`finance_accrual.py`**, который повторяет старый интерфейс:
+To avoid editing the same logic in 7 scripts, a single layer **`finance_accrual.py`**
+mirrors the old interface:
 
-| Функция | Заменяет | Возвращает |
+| Function | Replaces | Returns |
 |---|---|---|
-| `totals(date)` | `transaction/totals` за день | dict с теми же ключами (`accruals_for_sale`, `sale_commission`, `processing_and_delivery`, ...) и знаками |
-| `totals_period(d1, d2)` | `transaction/totals` за период | то же, просуммированное по дням |
-| `sales_by_sku(date)` | продажи по SKU из `transaction/list` | `{sku: ₽}` |
-| `sales_total(date)` | суммарные продажи за день | `₽` |
-| `accrual_types()` | — | `{type_id: name}` (справочник, кэш) |
-| `postings(numbers)` | `accrual/postings` | сырые начисления по отправлениям |
+| `totals(date)` | `transaction/totals` for a day | dict with the same keys (`accruals_for_sale`, `sale_commission`, `processing_and_delivery`, ...) and signs |
+| `totals_period(d1, d2)` | `transaction/totals` for a period | the same, summed by day |
+| `sales_by_sku(date)` | per-SKU sales from `transaction/list` | `{sku: amount}` |
+| `sales_total(date)` | total sales for a day | amount |
+| `accrual_types()` | (none) | `{type_id: name}` (reference, cached) |
+| `postings(numbers)` | `accrual/postings` | raw accruals per posting |
 
-Использование:
+Usage:
 
 ```python
 from finance_accrual import totals, sales_by_sku
 
-t = totals("2026-06-17")        # drop-in под старую логику комиссий
-sku_rub = sales_by_sku("2026-06-17")
+t = totals("2026-06-17")          # drop-in for the old commission logic
+sku_amount = sales_by_sku("2026-06-17")
 ```
 
-Маппинг `type_id → категория` (`CATEGORY_MAP` в модуле) сверен до копейки
-с прежним `totals` на 2026-06-17. Незнакомый `type_id` уходит в
-`others_amount` и печатает `[accrual] UNMAPPED type_id=...` — общая сумма
-при этом остаётся верной, но тип надо вручную отнести в нужную категорию.
+The `type_id` to category mapping (`CATEGORY_MAP` in the module) was reconciled
+to the cent against the old `totals`. An unknown `type_id` falls into
+`others_amount` and prints `[accrual] UNMAPPED type_id=...`; the total stays
+correct, but the type should be assigned to the right category by hand.
 
-**`probe_accrual.py`** — разведочный скрипт (только читает и печатает):
-дёргает три новых метода за дату и сверяет их со старыми, пока те живы.
-Перед окончательным переключением прогоните его на нескольких датах и
-закройте все `UNMAPPED`:
+**`probe_accrual.py`** is a read-only exploration script: it calls the three new
+methods for a date and compares them with the old ones while they are still
+alive. Run it on several dates and close all `UNMAPPED` before the final switch:
 
 ```bash
 python probe_accrual.py 2026-06-15
-python finance_accrual.py 2026-06-15   # быстрый self-check totals()
+python finance_accrual.py 2026-06-15   # quick self-check of totals()
 ```
 
-Особенности новых методов: суммы приходят строками (`"-42.7"`), пагинация
-`by-day` — через курсор `last_id`, `accrual/postings` принимает номера
-отправлений (не даты) и по свежим отправлениям может быть пустым — поэтому
-рабочая лошадка для регулярных отчётов именно `by-day`.
+Notes on the new methods: amounts arrive as strings (`"-42.7"`), `by-day`
+paginates via a `last_id` cursor, and `accrual/postings` takes posting numbers
+(not dates) and can be empty for fresh postings, so the workhorse for regular
+reports is `by-day`.
 
-## Возможные проблемы и примечания
+## Notes
 
-- Архитектура скриптов плоская: общая бизнес-логика распределена по файлам.
-- В репозитории лежит `google-creds.json`; для публичной демонстрации лучше заменить его на шаблон.
-- Часть задач сильно зависит от структуры Google Sheets и словарей в `constants.py`.
-- Некоторые даты и режимы вычисляются автоматически как "вчера"; это удобно для cron, но требует проверки при ручном backfill.
+- Flat script architecture: shared business logic is spread across files.
+- No secrets are committed: credentials live in `.env` and `google-creds.json`
+  (both gitignored); the product catalog lives in `constants.py` (gitignored,
+  see `constants.example.py`).
+- Some jobs depend on the Google Sheets structure and the mappings in
+  `constants.py`.
+- Some dates and modes are computed automatically as "yesterday", convenient for
+  cron but worth checking for manual backfill.
 
-Подробности по переменным окружения и cron смотрите в `CONFIG.md` и `RUNBOOK.md`.
+See `CONFIG.md` and `RUNBOOK.md` for environment variables and cron details.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
